@@ -58,9 +58,7 @@ config = {
     'monitor_metric': 'val_loss',
     'dropout_rate' : 0.0001,
     'filtersnum' : 64,
-    'regularizer_rate' : 1e-6
-    
-    
+    'regularizer_rate' : 1e-6   
 }
 
 def create_model():

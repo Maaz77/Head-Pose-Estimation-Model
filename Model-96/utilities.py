@@ -5,27 +5,42 @@ import matplotlib.pyplot as plt
 import io
 
 class WandbCallback(keras.callbacks.Callback):
-    def __init__(self):
-        super().__init__()
-        self.losses = []
-        self.val_losses = []
-        self.maes = []
-        self.val_maes = []
 
-    def on_epoch_end(self, epoch, logs=None):
-        # Store metrics
-        self.losses.append(logs['loss'])
-        self.val_losses.append(logs['val_loss'])
-        self.maes.append(logs['mae'])
-        self.val_maes.append(logs['val_mae'])
+    def on_epoch_end(self, epoch, logs=None):        
+        logs = logs or {}
         
+        # Calculate mean regression losses
+        mean_train_reg_loss = np.mean([
+            logs['yaw_reg_loss'],
+            logs['pitch_reg_loss'],
+            logs['roll_reg_loss']
+        ])
+        mean_val_reg_loss = np.mean([
+            logs['val_yaw_reg_loss'],
+            logs['val_pitch_reg_loss'],
+            logs['val_roll_reg_loss']
+        ])
+        # Calculate mean MAE metrics
+        mean_train_mae = np.mean([
+            logs['yaw_reg_mae'],
+            logs['pitch_reg_mae'],
+            logs['roll_reg_mae']
+        ])
+        mean_val_mae = np.mean([
+            logs['val_yaw_reg_mae'],
+            logs['val_pitch_reg_mae'],
+            logs['val_roll_reg_mae']
+        ])
+
         # Log metrics to wandb
         wandb.log({
             "epoch": epoch,
-            "train_loss": logs['loss'],
-            "val_loss": logs['val_loss'],
-            "train_mae": logs['mae'],
-            "val_mae": logs['val_mae']
+            "total_train_loss": logs['loss'],
+            "total_val_loss": logs['val_loss'],
+            "avg_train_reg_loss": mean_train_reg_loss,
+            "avg_val_reg_loss": mean_val_reg_loss,
+            "avg_train_reg_mae": mean_train_mae,
+            "avg_val_reg_mae": mean_val_mae
         })
 
 def load_dataset(dataset_path):
@@ -40,42 +55,51 @@ def load_model_from_json(model_path):
         model_json = f.read()
     return keras.models.model_from_json(model_json)
 
-def load_dataset_with_weights(npz_path):
-    """
-    Load a .npz containing 'features' and 'poses' (in YPR order),
-    compute per-sample weights based on head-off-axis angle,
-    and return an extended dict with a 'weights' field.
 
-    Weighting follows Eq. (12–13):
-      δ = arccos( cos(pitch) * cos(yaw) )             (12)  [oai_citation:0‡TMM_202201_HeadPose.pdf](file-service://file-1tYGoLsc7AfuTBj2j9aPZR)
-      w = 1                    if δ ≤ 60°
-          0.5 ** ((δ - 60) / 5)  if δ  > 60°          (13)  [oai_citation:1‡TMM_202201_HeadPose.pdf](file-service://file-1tYGoLsc7AfuTBj2j9aPZR)
+def load_and_preprocess(
+    npz_path: str,
+    n_bins: int = 66,
+    M: float = 99.0
+):
     """
-    data = np.load(npz_path)
-    features = data['features']
-    poses    = data['poses']   # shape (N,3): [yaw, pitch, roll]
+    Load .npz with 'features' and 'poses' (yaw,pitch,roll in degrees),
+    filter out samples with any |angle| > M,
+    compute per-sample weights,
+    compute discrete bin indices and one-hot labels.
+    Returns: X, poses, weights, one_hot (N,3,n_bins)
+    """
+    data     = np.load(npz_path)
+    X        = data['features']             
+    poses    = data['poses']               
 
-    # Extract yaw & pitch (in degrees), convert to radians
+    # 1) Filter out-of-range samples
+    in_range = np.all(np.abs(poses) <= M, axis=1)
+    X        = X[in_range]
+    poses    = poses[in_range]
+
+    # 2) Compute weights
     yaw_rad   = np.deg2rad(poses[:, 0])
     pitch_rad = np.deg2rad(poses[:, 1])
-
-    # Eq. 12: δ = arccos( cos(pitch) * cos(yaw) )
     cos_prod  = np.cos(pitch_rad) * np.cos(yaw_rad)
-    cos_prod  = np.clip(cos_prod, -1.0, 1.0)  # numerical safety
-    delta_rad = np.arccos(cos_prod)
-    delta_deg = np.rad2deg(delta_rad)
+    cos_prod  = np.clip(cos_prod, -1.0, 1.0)
+    delta_deg = np.rad2deg(np.arccos(cos_prod))
 
-    # Eq. 13: weight = 1 if δ ≤ 60; else weight = 0.5 ** ((δ − 60) / 5)
     weights = np.ones_like(delta_deg)
-    mask    = delta_deg > 60.0
-    weights[mask] = 0.5 ** ((delta_deg[mask] - 60.0) / 5.0)
+    far_mask = delta_deg > 60.0
+    weights[far_mask] = 0.5 ** ((delta_deg[far_mask] - 60.0) / 5.0)
 
-    return {
-        'features': features,
-        'poses':    poses,
-        'weights':  weights
-    }
-    
+    # 3) Discretize into bins
+    delta = 2 * M / n_bins
+    eps   = 1e-6
+    raw_idx = np.floor((poses + M + eps) / delta).astype(int)
+    bin_indices = np.clip(raw_idx, 0, n_bins - 1)  # shape (N,3)
+
+    # 4) One-hot encoding
+    one_hot = np.eye(n_bins, dtype=np.float32)[bin_indices]  # (N,3,n_bins)
+
+    return X, poses, weights, one_hot , bin_indices
+
+
 
 def analyze_angle_distributions(train_poses, test_poses):
     """Analyze and visualize angle distributions in train and test sets."""

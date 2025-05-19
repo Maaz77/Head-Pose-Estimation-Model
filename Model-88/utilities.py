@@ -7,6 +7,8 @@ import os
 from datetime import datetime
 import matplotlib.pyplot as plt
 import io
+import PIL.Image
+
 
 class WandbCallback(keras.callbacks.Callback):
     # def __init__(self):
@@ -79,7 +81,6 @@ def analyze_angle_distributions(train_poses, test_poses):
     buf.seek(0)
     
     # Convert to numpy array
-    import PIL.Image
     image = PIL.Image.open(buf)
     image_array = np.array(image)
     

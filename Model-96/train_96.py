@@ -3,13 +3,10 @@ import tensorflow as tf
 from sklearn.model_selection import train_test_split
 import wandb
 import os
-import io
 import keras
-from datetime import datetime
 import matplotlib.pyplot as plt
-from utilities import WandbCallback, load_dataset, load_and_preprocess, load_model_from_json, analyze_angle_distributions
-from keras import layers, models, losses
-
+from utilities import WandbCallback, load_dataset, load_and_preprocess, analyze_angle_distributions
+from keras import layers, models, losses , activations
 # Suppress warnings
 
 import warnings
@@ -39,13 +36,13 @@ load_dotenv()
 ########################################################
 config = {
     # Training parameters
-    'learning_rate': 0.00028,  # Increased from 0.00014 to account for 4x larger batch size
-    'batch_size': 128 ,
+    'learning_rate': 0.00028, 
+    'batch_size': 128,
     'total_epochs': 5000,
     'early_stopping_patience': 40,
     'early_stopping_min_delta': 0.001,  # Minimum change in monitored metric to qualify as an improvement
     # Optimizer parameters
-    'optimizer': 'sgd',
+    'optimizer': 'adamax', 
     'loss_function': 'mse+crossentropy',
     'performance_metrics': ['mae'],
     # Model checkpointing
@@ -127,8 +124,36 @@ def build_model(
         'roll_prob':  losses.CategoricalCrossentropy(),
         'roll_reg':   losses.MeanSquaredError(),
     }
+    
+    scheduler = keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=config['learning_rate'],
+        decay_steps=5000,
+        decay_rate=0.96,
+        staircase=True
+    )
+    
+    # Create optimizer with learning rate from config
+    if config['optimizer'].lower().strip() == 'adam':
+        optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=config['learning_rate'])
+    elif config['optimizer'].lower().strip() == 'adadelta':
+        optimizer = tf.keras.optimizers.legacy.Adadelta(learning_rate=config['learning_rate'])
+    elif config['optimizer'].lower().strip() == 'sgd':
+        optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=config['learning_rate'])
+    elif config['optimizer'].lower().strip() == 'rmsprop':
+        optimizer = tf.keras.optimizers.legacy.RMSprop(learning_rate=config['learning_rate'])
+    elif config['optimizer'].lower().strip() == 'adamax':
+        optimizer = tf.keras.optimizers.legacy.Adamax(learning_rate=config['learning_rate'])
+    elif config['optimizer'].lower().strip() == 'adagrad':
+        optimizer = tf.keras.optimizers.legacy.Adagrad(learning_rate=config['learning_rate'])
+    elif config['optimizer'].lower().strip() == 'nadam':
+        optimizer = tf.keras.optimizers.legacy.Nadam(learning_rate=config['learning_rate'])
+    elif config['optimizer'].lower().strip() == 'ftrl':
+        optimizer = tf.keras.optimizers.legacy.Ftrl(learning_rate=config['learning_rate'])
+    else: 
+        raise ValueError(f"Unsupported optimizer: {config['optimizer']}")
+    
     model.compile(
-        optimizer='adam',
+        optimizer=optimizer,
         loss=loss_fns,
         metrics={
             'yaw_reg': 'mae',
@@ -152,7 +177,7 @@ def train():
         project="HeadPoseRegressor-BIWI-96features",
         config=config,
         notes="",
-        tags=["BIWI_Train", "Reg+CLS_Loss", "Weighted_Samples"]
+        tags=["BIWI_Train", "Reg+CLS_Loss", "Weighted_Samples"] # Available tags: "BIWI_Train", "Reg+CLS_Loss", "Weighted_Samples", "BIWInoTrack_And_BIWITrain"
     )
     
     print("Loading datasets...")
@@ -166,6 +191,8 @@ def train():
     print(f"train_weights shape: {train_weights.shape}")
     print(f"train_one_hot shape: {train_one_hot.shape}")
     
+    train_features
+    
     test_features, test_poses, test_weights, test_one_hot, _ = load_and_preprocess(DIR_PATH + 'BIWI_test_features_96.npz' , n_bins=config['n_bins'])
     
     test_features = test_features.reshape(-1, 1, 1, 96)
@@ -174,6 +201,8 @@ def train():
     print(f"test_poses shape: {test_poses.shape}")
     print(f"test_weights shape: {test_weights.shape}")
     print(f"test_one_hot shape: {test_one_hot.shape}")
+    
+    
     
     train_features, val_features, train_poses, val_poses, train_weights, val_weights, train_one_hot, val_one_hot = train_test_split(
         train_features, train_poses, train_weights, train_one_hot,
@@ -213,6 +242,21 @@ def train():
     TRAINED_MODELS_PATH = os.getenv('TRAIN_MODEL_96_REG_CLS_PATH')
 
     callbacks = [
+        
+        
+
+        # keras.callbacks.ReduceLROnPlateau(
+        #     monitor=config['monitor_metric'],
+        #     factor=0.5,             # Halves the LR each time
+        #     patience=20,            # Waits 20 epochs after val_loss stops improving
+        #     min_delta=1e-4,         # Slight improvement required to reset patience
+        #     cooldown=5,             # Waits 5 epochs after LR drop before monitoring again
+        #     min_lr=1e-6,            # Don’t reduce LR below this
+        #     verbose=1
+        # ),
+        
+
+        
         keras.callbacks.ModelCheckpoint(
             f'{TRAINED_MODELS_PATH}/{wandb.run.id}.h5',
             monitor=config['monitor_metric'],
@@ -270,7 +314,7 @@ def train():
         x=test_features,
         y=test_y,
         sample_weight=test_weights,
-        verbose=2
+        verbose=0
     )
     
     # Log test results to wandb
@@ -298,14 +342,7 @@ def train():
     wandb.run.summary['model_architecture'] = mymodel.to_json()
 
 
-def plot_weights_distribution(weights, title):
-    plt.figure(figsize=(10, 6))
-    plt.scatter(range(len(weights)), weights, alpha=0.7)
-    plt.title(title)
-    plt.xlabel('Index')
-    plt.ylabel('Weights')
-    plt.grid()
-    plt.show()
+
     
 if __name__ == "__main__":
     

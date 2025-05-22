@@ -147,3 +147,12 @@ def analyze_angle_distributions(train_poses, test_poses):
         
     })
     plt.close()
+    
+def plot_weights_distribution(weights, title):
+    plt.figure(figsize=(10, 6))
+    plt.scatter(range(len(weights)), weights, alpha=0.7)
+    plt.title(title)
+    plt.xlabel('Index')
+    plt.ylabel('Weights')
+    plt.grid()
+    plt.show()

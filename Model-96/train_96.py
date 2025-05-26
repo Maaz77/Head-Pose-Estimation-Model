@@ -21,23 +21,13 @@ load_dotenv()
 # Define training configuration
 
 ########################################################
-# 1. batch size above 256 is not a good idea.
-# 2. lr above 0.00028 is not a good idea.
-# 3. adding more that 3 conv layers probably is not a good idea.
-# 4. mae loss is not working.
-# 5. lr scheduler is not making it better.
-# 6. batch normalization is not improving the model based on the metrics, but it must be helping with the model robustness.
-# 7. BN actually improved test_loss but not the test_mae. and also it affected the training and validation loss and mae negatively.
-# 8. when using depthwise separable conv instead of normal conv, the performance degrades which says that we need to add complexitiy to the model to increase performance.
-# 9. the more complex the model, the better the performance.
-# 10. adding to much complexity is not a good idea, the model with 101k parameters is working better than the model with 331k parameters.
-# 11. moving the activation functions after the add layers is not a good idea. lets keep them with the conv layers.
+# using one conv layer with 4 filters gives a good performance, but if we decrease the number of filters to 2 the performance drops significantly.
 
 ########################################################
 config = {
     # Training parameters
-    'learning_rate': 0.00028, 
-    'batch_size': 128,
+    'learning_rate': 0.0028, 
+    'batch_size': 512,
     'total_epochs': 5000,
     'early_stopping_patience': 40,
     'early_stopping_min_delta': 0.001,  # Minimum change in monitored metric to qualify as an improvement
@@ -76,8 +66,10 @@ def build_model(
     inp = layers.Input(shape=(None, None, input_dim), name='input_image')
 
     # --- backbone ---
-    x = layers.Conv2D(10, 1, activation=hard_swish, padding='same', 
+    x = layers.Conv2D(4, 1, activation=hard_swish, padding='same', 
                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(inp)
+    # x = layers.Conv2D(10, 3, activation=hard_swish, padding='same',
+    #                  kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
     x = layers.SpatialDropout2D(config['dropout_rate'])(x)
     x = layers.GlobalAveragePooling2D()(x)
 
@@ -177,12 +169,43 @@ def train():
         project="HeadPoseRegressor-BIWI-96features",
         config=config,
         notes="",
-        tags=["BIWI_Train", "Reg+CLS_Loss", "Weighted_Samples"] # Available tags: "BIWI_Train", "Reg+CLS_Loss", "Weighted_Samples", "BIWInoTrack_And_BIWITrain"
+        tags=["BIWInoTrack_And_BIWITrain", "Reg+CLS_Loss", "Weighted_Samples" , "AFW" , "AFW_Flip", "HELEN", "HELEN_Flip", "IBUG" , "IBUG_Flip", "LFPW" , "LFPW_Flip"] 
+        # Available tags: "BIWInoTrack_And_BIWITrain", "Reg+CLS_Loss", "Weighted_Samples" , "AFW" , "AFW_Flip", "HELEN", "HELEN_Flip", "IBUG" , "IBUG_Flip", "LFPW" , "LFPW_Flip"
     )
     
     print("Loading datasets...")
     DIR_PATH = os.getenv('FEATUREMAPS_DIR_PATH')
     train_features, train_poses, train_weights, train_one_hot, _ = load_and_preprocess(DIR_PATH + 'BIWI_train_features_96.npz', n_bins=config['n_bins'])
+    train_features2 , train_poses2, train_weights2, train_one_hot2, _ = load_and_preprocess(DIR_PATH + 'BIWI_NoTrack_features_96.npz', n_bins=config['n_bins'])
+    
+    train_features3 , train_poses3, train_weights3, train_one_hot3, _ = load_and_preprocess(DIR_PATH + 'AFW_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    train_features4 , train_poses4, train_weights4, train_one_hot4, _ = load_and_preprocess(DIR_PATH + 'AFW_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    
+    train_features5 , train_poses5, train_weights5, train_one_hot5, _ = load_and_preprocess(DIR_PATH + 'HELEN_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    train_features6 , train_poses6, train_weights6, train_one_hot6, _ = load_and_preprocess(DIR_PATH + 'HELEN_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    
+    train_features7 , train_poses7, train_weights7, train_one_hot7, _ = load_and_preprocess(DIR_PATH + 'IBUG_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    train_features8 , train_poses8, train_weights8, train_one_hot8, _ = load_and_preprocess(DIR_PATH + 'IBUG_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    
+    train_features9 , train_poses9, train_weights9, train_one_hot9, _ = load_and_preprocess(DIR_PATH + 'LFPW_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    train_features10 , train_poses10, train_weights10, train_one_hot10, _ = load_and_preprocess(DIR_PATH + 'LFPW_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
+    
+    # Concatenate the two datasets
+    train_features = np.concatenate((train_features, train_features2, train_features3 , train_features4, train_features5, train_features6, train_features7 , train_features8, train_features9 , train_features10), axis=0)
+    train_poses = np.concatenate((train_poses, train_poses2 , train_poses3 , train_poses4, train_poses5 , train_poses6, train_poses7, train_poses8, train_poses9, train_poses10), axis=0)
+    train_weights = np.concatenate((train_weights, train_weights2 , train_weights3, train_weights4, train_weights5, train_weights6 , train_weights7 , train_weights8 , train_weights9 , train_weights10), axis=0)
+    train_one_hot = np.concatenate((train_one_hot, train_one_hot2 , train_one_hot3 , train_one_hot4 , train_one_hot5 , train_one_hot6 , train_one_hot7 , train_one_hot8 , train_one_hot9 , train_one_hot10), axis=0)
+    
+    # delete variables to free memory
+    del train_features2, train_poses2, train_weights2, train_one_hot2
+    del train_features3, train_poses3, train_weights3, train_one_hot3
+    del train_features4, train_poses4, train_weights4, train_one_hot4
+    del train_features5, train_poses5, train_weights5, train_one_hot5
+    del train_features6, train_poses6, train_weights6, train_one_hot6
+    del train_features7, train_poses7, train_weights7, train_one_hot7
+    del train_features8, train_poses8, train_weights8, train_one_hot8
+    del train_features9, train_poses9, train_weights9, train_one_hot9
+    del train_features10, train_poses10, train_weights10, train_one_hot10
     
     train_features = train_features.reshape(-1, 1, 1, 96)
     
@@ -191,17 +214,25 @@ def train():
     print(f"train_weights shape: {train_weights.shape}")
     print(f"train_one_hot shape: {train_one_hot.shape}")
     
-    train_features
     
-    test_features, test_poses, test_weights, test_one_hot, _ = load_and_preprocess(DIR_PATH + 'BIWI_test_features_96.npz' , n_bins=config['n_bins'])
+    test_biwi_features, test_biwi_poses, test_biwi_weights, test_biwi_one_hot, _ = load_and_preprocess(DIR_PATH + 'BIWI_test_features_96.npz' , n_bins=config['n_bins'])
+    test_AFLW2000_features, test_AFLW2000_poses, test_AFLW2000_weights, test_AFLW2000_one_hot, _ = load_and_preprocess(DIR_PATH + 'AFLW2000_features_96_0.7_1.npz', n_bins=config['n_bins'])
     
-    test_features = test_features.reshape(-1, 1, 1, 96)
     
-    print(f"test_features shape: {test_features.shape}")
-    print(f"test_poses shape: {test_poses.shape}")
-    print(f"test_weights shape: {test_weights.shape}")
-    print(f"test_one_hot shape: {test_one_hot.shape}")
+    test_biwi_features = test_biwi_features.reshape(-1, 1, 1, 96)
     
+    test_AFLW2000_features = test_AFLW2000_features.reshape(-1, 1, 1, 96)
+    
+    print(f"test_biwi_features shape: {test_biwi_features.shape}")
+    print(f"test_biwi_poses shape: {test_biwi_poses.shape}")
+    print(f"test_biwi_weights shape: {test_biwi_weights.shape}")
+    print(f"test_biwi_one_hot shape: {test_biwi_one_hot.shape}")
+    
+    
+    print(f"test_AFLW2000_features shape: {test_AFLW2000_features.shape}")
+    print(f"test_AFLW2000_poses shape: {test_AFLW2000_poses.shape}")
+    print(f"test_AFLW2000_weights shape: {test_AFLW2000_weights.shape}")
+    print(f"test_AFLW2000_one_hot shape: {test_AFLW2000_one_hot.shape}")
     
     
     train_features, val_features, train_poses, val_poses, train_weights, val_weights, train_one_hot, val_one_hot = train_test_split(
@@ -230,14 +261,24 @@ def train():
     val_pitch_reg = val_poses[:, 1:2]
     val_roll_reg = val_poses[:, 2:3]
     
-    # Test outputs
-    test_yaw_prob = test_one_hot[:, 0]
-    test_pitch_prob = test_one_hot[:, 1]
-    test_roll_prob = test_one_hot[:, 2]
+    # Test biwi outputs
+    test_biwi_yaw_prob = test_biwi_one_hot[:, 0]
+    test_biwi_pitch_prob = test_biwi_one_hot[:, 1]
+    test_biwi_roll_prob = test_biwi_one_hot[:, 2]
     
-    test_yaw_reg = test_poses[:, 0:1]
-    test_pitch_reg = test_poses[:, 1:2]
-    test_roll_reg = test_poses[:, 2:3]
+    test_biwi_yaw_reg = test_biwi_poses[:, 0:1]
+    test_biwi_pitch_reg = test_biwi_poses[:, 1:2]
+    test_biwi_roll_reg = test_biwi_poses[:, 2:3]
+    
+    # Test AFLW2000 outputs
+    test_AFLW2000_yaw_prob = test_AFLW2000_one_hot[:, 0]
+    test_AFLW2000_pitch_prob = test_AFLW2000_one_hot[:, 1]
+    test_AFLW2000_roll_prob = test_AFLW2000_one_hot[:, 2]
+    
+    test_AFLW2000_yaw_reg = test_AFLW2000_poses[:, 0:1]
+    test_AFLW2000_pitch_reg = test_AFLW2000_poses[:, 1:2]
+    test_AFLW2000_roll_reg = test_AFLW2000_poses[:, 2:3]
+    
     
     TRAINED_MODELS_PATH = os.getenv('TRAIN_MODEL_96_REG_CLS_PATH')
 
@@ -301,48 +342,85 @@ def train():
     )
     
     # Evaluate on test set
-    test_y = {
-        'yaw_prob': test_yaw_prob,
-        'yaw_reg': test_yaw_reg,
-        'pitch_prob': test_pitch_prob,
-        'pitch_reg': test_pitch_reg,
-        'roll_prob': test_roll_prob,
-        'roll_reg': test_roll_reg
+    test_biwi_y = {
+        'yaw_prob': test_biwi_yaw_prob,
+        'yaw_reg': test_biwi_yaw_reg,
+        'pitch_prob': test_biwi_pitch_prob,
+        'pitch_reg': test_biwi_pitch_reg,
+        'roll_prob': test_biwi_roll_prob,
+        'roll_reg': test_biwi_roll_reg
     }
     
-    test_results = mymodel.evaluate(
-        x=test_features,
-        y=test_y,
-        sample_weight=test_weights,
+    # Evaluate on AFLW2000 set
+    test_AFLW2000_y = {
+        'yaw_prob': test_AFLW2000_yaw_prob,
+        'yaw_reg': test_AFLW2000_yaw_reg,
+        'pitch_prob': test_AFLW2000_pitch_prob,
+        'pitch_reg': test_AFLW2000_pitch_reg,
+        'roll_prob': test_AFLW2000_roll_prob,
+        'roll_reg': test_AFLW2000_roll_reg
+    }
+    
+    test_biwi_results = mymodel.evaluate(
+        x=test_biwi_features,
+        y=test_biwi_y,
+        sample_weight=test_biwi_weights,
         verbose=0
     )
     
-    # Log test results to wandb
-    test_metrics = {}
+    test_AFLW2000_results = mymodel.evaluate(
+        x=test_AFLW2000_features,
+        y=test_AFLW2000_y,
+        sample_weight=test_AFLW2000_weights,
+        verbose=0
+    )
+    
+    
+    # Log test biwi results to wandb
+    test_biwi_metrics = {}
     for i, metric_name in enumerate(mymodel.metrics_names):
-        test_metrics[f'test_{metric_name}'] = test_results[i]
+        test_biwi_metrics[f'test_{metric_name}'] = test_biwi_results[i]
     
     # Calculate mean regression loss for test data
     mean_test_reg_loss = np.mean([
-        test_metrics['test_yaw_reg_loss'],
-        test_metrics['test_pitch_reg_loss'],
-        test_metrics['test_roll_reg_loss']
+        test_biwi_metrics['test_yaw_reg_loss'],
+        test_biwi_metrics['test_pitch_reg_loss'],
+        test_biwi_metrics['test_roll_reg_loss']
     ])
     
     # Calculate mean MAE for test data
     mean_test_mae = np.mean([
-        test_metrics['test_yaw_reg_mae'],
-        test_metrics['test_pitch_reg_mae'],
-        test_metrics['test_roll_reg_mae']
+        test_biwi_metrics['test_yaw_reg_mae'],
+        test_biwi_metrics['test_pitch_reg_mae'],
+        test_biwi_metrics['test_roll_reg_mae']
+    ])
+    
+    # log test AFLW2000 results to wandb
+    test_AFLW2000_metrics = {}
+    for i, metric_name in enumerate(mymodel.metrics_names):
+        test_AFLW2000_metrics[f'test_AFLW2000_{metric_name}'] = test_AFLW2000_results[i]
+    # Calculate mean regression loss for test AFLW2000 data
+    mean_test_AFLW2000_reg_loss = np.mean([
+        test_AFLW2000_metrics['test_AFLW2000_yaw_reg_loss'],
+        test_AFLW2000_metrics['test_AFLW2000_pitch_reg_loss'],
+        test_AFLW2000_metrics['test_AFLW2000_roll_reg_loss']
+    ])
+    # Calculate mean MAE for test AFLW2000 data
+    mean_test_AFLW2000_mae = np.mean([
+        test_AFLW2000_metrics['test_AFLW2000_yaw_reg_mae'],
+        test_AFLW2000_metrics['test_AFLW2000_pitch_reg_mae'],
+        test_AFLW2000_metrics['test_AFLW2000_roll_reg_mae']
     ])
             
     wandb.run.summary['total_parameters'] = mymodel.count_params()
     wandb.run.summary['test_loss'] = mean_test_reg_loss
     wandb.run.summary['test_mae'] = mean_test_mae
+    wandb.run.summary['test_AFLW2000_loss'] = mean_test_AFLW2000_reg_loss
+    wandb.run.summary['test_AFLW2000_mae'] = mean_test_AFLW2000_mae
     wandb.run.summary['model_architecture'] = mymodel.to_json()
 
-
-
+    print (f"BIWI test mean mae: {mean_test_mae}")
+    print (f"AFLW2000 test mean mae: {mean_test_AFLW2000_mae}")
     
 if __name__ == "__main__":
     

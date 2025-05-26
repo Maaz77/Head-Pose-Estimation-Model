@@ -22,7 +22,7 @@ load_dotenv()
 
 ########################################################
 # using one conv layer with 4 filters gives a good performance, but if we decrease the number of filters to 2 the performance drops significantly.
-
+# apparently, by increasing model complexity over 1378 parameters, the model starts to overfit, then applying overfitting prevention techniques does not help much. so in my opiniou, it using one layer with 4 filters is the best.
 ########################################################
 config = {
     # Training parameters
@@ -38,8 +38,8 @@ config = {
     # Model checkpointing
     'save_best_only': True,
     'monitor_metric': 'val_loss',
-    'dropout_rate' : 0.0001,
-    'regularizer_rate' : 1e-2, 
+    'dropout_rate' : 0.1,
+    'regularizer_rate' : 1e-1, 
     'n_bins': 66,   
     'M': 99.0       # Maximum angle in degrees
 }
@@ -66,10 +66,17 @@ def build_model(
     inp = layers.Input(shape=(None, None, input_dim), name='input_image')
 
     # --- backbone ---
-    x = layers.Conv2D(4, 1, activation=hard_swish, padding='same', 
+    x = layers.Conv2D(16*2, 1, activation=hard_swish, padding='same', 
                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(inp)
-    # x = layers.Conv2D(10, 3, activation=hard_swish, padding='same',
-    #                  kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+    x = layers.SpatialDropout2D(config['dropout_rate'])(x)
+    x = layers.Conv2D(16 * 2, 1, activation=hard_swish, padding='same',
+                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+    x = layers.SpatialDropout2D(config['dropout_rate'])(x)
+    x = layers.Conv2D(32 * 2, 1, activation=hard_swish, padding='same',
+                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+    x = layers.SpatialDropout2D(config['dropout_rate'])(x)
+    x = layers.Conv2D(64 * 2, 1, activation=hard_swish, padding='same',
+                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
     x = layers.SpatialDropout2D(config['dropout_rate'])(x)
     x = layers.GlobalAveragePooling2D()(x)
 

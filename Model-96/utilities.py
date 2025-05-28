@@ -3,6 +3,8 @@ import keras
 import numpy as np
 import matplotlib.pyplot as plt
 import io
+import os
+from typing import List, Tuple
 
 class WandbCallback(keras.callbacks.Callback):
 
@@ -156,3 +158,51 @@ def plot_weights_distribution(weights, title):
     plt.ylabel('Weights')
     plt.grid()
     plt.show()
+    
+    
+def load_datasets_for_training(dataset_names: List[str] , num_bins: int = 66):
+    """
+    Load and concatenate multiple datasets for training.
+    
+    Args:
+        dataset_names: List of dataset file names (without .npz extension)
+        
+    Returns:
+        tuple: (train_features, train_poses, train_weights, train_one_hot)
+    """
+    print(f"Loading {len(dataset_names)} datasets...")
+    DIR_PATH = os.getenv('FEATUREMAPS_DIR_PATH')
+    
+    # Load first dataset to initialize arrays
+    if not dataset_names:
+        raise ValueError("At least one dataset name must be provided")
+    
+    first_dataset = dataset_names[0]
+    train_features, train_poses, train_weights, train_one_hot, _ = load_and_preprocess(
+        DIR_PATH + first_dataset, n_bins=num_bins
+    )
+    
+    # Load and concatenate additional datasets
+    for dataset_name in dataset_names[1:]:
+        features, poses, weights, one_hot, _ = load_and_preprocess(
+            DIR_PATH + dataset_name, n_bins=num_bins
+        )
+        
+        # Concatenate with existing data
+        train_features = np.concatenate((train_features, features), axis=0)
+        train_poses = np.concatenate((train_poses, poses), axis=0)
+        train_weights = np.concatenate((train_weights, weights), axis=0)
+        train_one_hot = np.concatenate((train_one_hot, one_hot), axis=0)
+        
+        # Clean up to free memory
+        del features, poses, weights, one_hot
+    
+    # Reshape features
+    train_features = train_features.reshape(-1, 1, 1, 96)
+    
+    print(f"train_features shape: {train_features.shape}")
+    print(f"train_poses shape: {train_poses.shape}")
+    print(f"train_weights shape: {train_weights.shape}")
+    print(f"train_one_hot shape: {train_one_hot.shape}")
+    
+    return train_features, train_poses, train_weights, train_one_hot

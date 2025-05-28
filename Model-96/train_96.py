@@ -5,8 +5,11 @@ import wandb
 import os
 import keras
 import matplotlib.pyplot as plt
-from utilities import WandbCallback, load_dataset, load_and_preprocess, analyze_angle_distributions
+from utilities import WandbCallback, load_and_preprocess , load_datasets_for_training
 from keras import layers, models, losses , activations
+from keras.callbacks import LearningRateScheduler
+import tempfile
+import math
 # Suppress warnings
 
 import warnings
@@ -14,6 +17,12 @@ import warnings
 warnings.filterwarnings('ignore')
 tf.get_logger().setLevel('ERROR')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Set fixed random seeds for reproducibility
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+tf.random.set_seed(RANDOM_SEED)
+os.environ['PYTHONHASHSEED'] = str(RANDOM_SEED)
 
 from dotenv import load_dotenv
 load_dotenv()  
@@ -23,11 +32,13 @@ load_dotenv()
 ########################################################
 # using one conv layer with 4 filters gives a good performance, but if we decrease the number of filters to 2 the performance drops significantly.
 # apparently, by increasing model complexity over 1378 parameters, the model starts to overfit, then applying overfitting prevention techniques does not help much. so in my opiniou, it using one layer with 4 filters is the best.
+# the models trained plain with hard_swish activation are not restorable from the saved objects. 
+
 ########################################################
 config = {
     # Training parameters
     'learning_rate': 0.0028, 
-    'batch_size': 512,
+    'batch_size': 128,
     'total_epochs': 5000,
     'early_stopping_patience': 40,
     'early_stopping_min_delta': 0.001,  # Minimum change in monitored metric to qualify as an improvement
@@ -38,11 +49,11 @@ config = {
     # Model checkpointing
     'save_best_only': True,
     'monitor_metric': 'val_loss',
-    'dropout_rate' : 0.1,
-    'regularizer_rate' : 1e-1, 
+    'dropout_rate' : 0.3,
+    'regularizer_rate' : 1e-1,  
     'n_bins': 66,   
     'M': 99.0       # Maximum angle in degrees
-}
+}                 
 
 
 def build_model( 
@@ -59,25 +70,14 @@ def build_model(
     # Create regularizer from config
     regularizer = tf.keras.regularizers.l2(config['regularizer_rate'])
     
-    # Define hard swish activation function
-    def hard_swish(x):
-        return x * tf.nn.relu6(x + 3) / 6
-    
+
     inp = layers.Input(shape=(None, None, input_dim), name='input_image')
 
     # --- backbone ---
-    x = layers.Conv2D(16*2, 1, activation=hard_swish, padding='same', 
+    x = layers.Conv2D(64, 1, activation='swish', padding='same', 
                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(inp)
     x = layers.SpatialDropout2D(config['dropout_rate'])(x)
-    x = layers.Conv2D(16 * 2, 1, activation=hard_swish, padding='same',
-                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
-    x = layers.SpatialDropout2D(config['dropout_rate'])(x)
-    x = layers.Conv2D(32 * 2, 1, activation=hard_swish, padding='same',
-                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
-    x = layers.SpatialDropout2D(config['dropout_rate'])(x)
-    x = layers.Conv2D(64 * 2, 1, activation=hard_swish, padding='same',
-                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
-    x = layers.SpatialDropout2D(config['dropout_rate'])(x)
+
     x = layers.GlobalAveragePooling2D()(x)
 
     # --- classification logits ---
@@ -124,12 +124,12 @@ def build_model(
         'roll_reg':   losses.MeanSquaredError(),
     }
     
-    scheduler = keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=config['learning_rate'],
-        decay_steps=5000,
-        decay_rate=0.96,
-        staircase=True
-    )
+    # scheduler = keras.optimizers.schedules.ExponentialDecay(
+    #     initial_learning_rate=config['learning_rate'],
+    #     decay_steps=5000,
+    #     decay_rate=0.96,
+    #     staircase=True
+    # )
     
     # Create optimizer with learning rate from config
     if config['optimizer'].lower().strip() == 'adam':
@@ -165,6 +165,18 @@ def build_model(
             
     )
     
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_path = os.path.join(temp_dir, 'test_model.h5')
+            model.save(test_path, save_format='h5')
+            loaded_model = tf.keras.models.load_model(test_path)
+            del loaded_model
+            print("✓ Model save/load test passed")
+    except Exception as e:
+        print(f"❌ Model save/load test failed: {e}")
+        # Uncomment to raise error: raise RuntimeError(f"Model not savable: {e}")
+    
     return model
 
 
@@ -176,52 +188,15 @@ def train():
         project="HeadPoseRegressor-BIWI-96features",
         config=config,
         notes="",
-        tags=["BIWInoTrack_And_BIWITrain", "Reg+CLS_Loss", "Weighted_Samples" , "AFW" , "AFW_Flip", "HELEN", "HELEN_Flip", "IBUG" , "IBUG_Flip", "LFPW" , "LFPW_Flip"] 
-        # Available tags: "BIWInoTrack_And_BIWITrain", "Reg+CLS_Loss", "Weighted_Samples" , "AFW" , "AFW_Flip", "HELEN", "HELEN_Flip", "IBUG" , "IBUG_Flip", "LFPW" , "LFPW_Flip"
+        tags=["BIWI_Train" , "Reg+CLS_Loss", "Weighted_Samples" ] 
+        # Available tags: "BIWI_Train" , "BIWInoTrack_And_BIWITrain", "Reg+CLS_Loss", "Weighted_Samples" , "AFW" , "AFW_Flip", "HELEN", "HELEN_Flip", "IBUG" , "IBUG_Flip", "LFPW" , "LFPW_Flip"
     )
     
-    print("Loading datasets...")
+    train_features, train_poses, train_weights, train_one_hot = load_datasets_for_training(['BIWI_train_features_96.npz'] , num_bins=config['n_bins']) 
+    #CHECK THE TAGS TO BE COMPATIBLE WITH THE LOADED DATASETS FOR TRAINING
+
+
     DIR_PATH = os.getenv('FEATUREMAPS_DIR_PATH')
-    train_features, train_poses, train_weights, train_one_hot, _ = load_and_preprocess(DIR_PATH + 'BIWI_train_features_96.npz', n_bins=config['n_bins'])
-    train_features2 , train_poses2, train_weights2, train_one_hot2, _ = load_and_preprocess(DIR_PATH + 'BIWI_NoTrack_features_96.npz', n_bins=config['n_bins'])
-    
-    train_features3 , train_poses3, train_weights3, train_one_hot3, _ = load_and_preprocess(DIR_PATH + 'AFW_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    train_features4 , train_poses4, train_weights4, train_one_hot4, _ = load_and_preprocess(DIR_PATH + 'AFW_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    
-    train_features5 , train_poses5, train_weights5, train_one_hot5, _ = load_and_preprocess(DIR_PATH + 'HELEN_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    train_features6 , train_poses6, train_weights6, train_one_hot6, _ = load_and_preprocess(DIR_PATH + 'HELEN_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    
-    train_features7 , train_poses7, train_weights7, train_one_hot7, _ = load_and_preprocess(DIR_PATH + 'IBUG_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    train_features8 , train_poses8, train_weights8, train_one_hot8, _ = load_and_preprocess(DIR_PATH + 'IBUG_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    
-    train_features9 , train_poses9, train_weights9, train_one_hot9, _ = load_and_preprocess(DIR_PATH + 'LFPW_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    train_features10 , train_poses10, train_weights10, train_one_hot10, _ = load_and_preprocess(DIR_PATH + 'LFPW_Flip_features_96_0.7_1.npz', n_bins=config['n_bins'])
-    
-    # Concatenate the two datasets
-    train_features = np.concatenate((train_features, train_features2, train_features3 , train_features4, train_features5, train_features6, train_features7 , train_features8, train_features9 , train_features10), axis=0)
-    train_poses = np.concatenate((train_poses, train_poses2 , train_poses3 , train_poses4, train_poses5 , train_poses6, train_poses7, train_poses8, train_poses9, train_poses10), axis=0)
-    train_weights = np.concatenate((train_weights, train_weights2 , train_weights3, train_weights4, train_weights5, train_weights6 , train_weights7 , train_weights8 , train_weights9 , train_weights10), axis=0)
-    train_one_hot = np.concatenate((train_one_hot, train_one_hot2 , train_one_hot3 , train_one_hot4 , train_one_hot5 , train_one_hot6 , train_one_hot7 , train_one_hot8 , train_one_hot9 , train_one_hot10), axis=0)
-    
-    # delete variables to free memory
-    del train_features2, train_poses2, train_weights2, train_one_hot2
-    del train_features3, train_poses3, train_weights3, train_one_hot3
-    del train_features4, train_poses4, train_weights4, train_one_hot4
-    del train_features5, train_poses5, train_weights5, train_one_hot5
-    del train_features6, train_poses6, train_weights6, train_one_hot6
-    del train_features7, train_poses7, train_weights7, train_one_hot7
-    del train_features8, train_poses8, train_weights8, train_one_hot8
-    del train_features9, train_poses9, train_weights9, train_one_hot9
-    del train_features10, train_poses10, train_weights10, train_one_hot10
-    
-    train_features = train_features.reshape(-1, 1, 1, 96)
-    
-    print(f"train_features shape: {train_features.shape}")
-    print(f"train_poses shape: {train_poses.shape}")
-    print(f"train_weights shape: {train_weights.shape}")
-    print(f"train_one_hot shape: {train_one_hot.shape}")
-    
-    
     test_biwi_features, test_biwi_poses, test_biwi_weights, test_biwi_one_hot, _ = load_and_preprocess(DIR_PATH + 'BIWI_test_features_96.npz' , n_bins=config['n_bins'])
     test_AFLW2000_features, test_AFLW2000_poses, test_AFLW2000_weights, test_AFLW2000_one_hot, _ = load_and_preprocess(DIR_PATH + 'AFLW2000_features_96_0.7_1.npz', n_bins=config['n_bins'])
     
@@ -248,9 +223,8 @@ def train():
         random_state=42
     )
     
-    mymodel = build_model()
-    
-    
+    mymodel = build_model()  
+          
     train_yaw_prob = train_one_hot[:, 0]    # Shape: (N, 66)
     train_pitch_prob = train_one_hot[:, 1]  # Shape: (N, 66)
     train_roll_prob = train_one_hot[:, 2]   # Shape: (N, 66)
@@ -287,26 +261,26 @@ def train():
     test_AFLW2000_roll_reg = test_AFLW2000_poses[:, 2:3]
     
     
-    TRAINED_MODELS_PATH = os.getenv('TRAIN_MODEL_96_REG_CLS_PATH')
+    TrainModels96RegClsNoHS = os.getenv("TRAIN_MODEL_96_REG_CLS_PATH_NoHS")
+    SAVE_PATH = os.path.join(TrainModels96RegClsNoHS, wandb.run.id + '.h5')
+
 
     callbacks = [
         
-        
-
-        # keras.callbacks.ReduceLROnPlateau(
-        #     monitor=config['monitor_metric'],
-        #     factor=0.5,             # Halves the LR each time
-        #     patience=20,            # Waits 20 epochs after val_loss stops improving
-        #     min_delta=1e-4,         # Slight improvement required to reset patience
-        #     cooldown=5,             # Waits 5 epochs after LR drop before monitoring again
-        #     min_lr=1e-6,            # Don’t reduce LR below this
-        #     verbose=1
-        # ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor=config['monitor_metric'],
+            factor=0.5,             # Halves the LR each time
+            patience=20,            # Waits 20 epochs after val_loss stops improving
+            min_delta=1e-4,         # Slight improvement required to reset patience
+            cooldown=5,             # Waits 5 epochs after LR drop before monitoring again
+            min_lr=1e-6,            # Don’t reduce LR below this
+            verbose=1
+        ),
         
 
         
         keras.callbacks.ModelCheckpoint(
-            f'{TRAINED_MODELS_PATH}/{wandb.run.id}.h5',
+            SAVE_PATH,
             monitor=config['monitor_metric'],
             save_best_only=config['save_best_only']
         ),

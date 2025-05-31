@@ -10,6 +10,7 @@ from keras import layers, models, losses , activations
 from keras.callbacks import LearningRateScheduler
 import tempfile
 import math
+import argparse
 # Suppress warnings
 
 import warnings
@@ -35,12 +36,13 @@ load_dotenv()
 # the models trained plain with hard_swish activation are not restorable from the saved objects. 
 
 ########################################################
+# Default configuration (will be overridden by sweep parameters)
 config = {
     # Training parameters
     'learning_rate': 0.0028, 
     'batch_size': 128,
     'total_epochs': 5000,
-    'early_stopping_patience': 40,
+    'early_stopping_patience': 30,
     'early_stopping_min_delta': 0.001,  # Minimum change in monitored metric to qualify as an improvement
     # Optimizer parameters
     'optimizer': 'adamax', 
@@ -52,8 +54,10 @@ config = {
     'dropout_rate' : 0.3,
     'regularizer_rate' : 1e-1,  
     'n_bins': 66,   
-    'M': 99.0       # Maximum angle in degrees
-}                 
+    'M': 99.0,      # Maximum angle in degrees
+    'num_filters': -1  # Number of filters in the convolutional layer
+}
+
 
 
 def build_model( 
@@ -74,7 +78,7 @@ def build_model(
     inp = layers.Input(shape=(None, None, input_dim), name='input_image')
 
     # --- backbone ---
-    x = layers.Conv2D(64, 1, activation='swish', padding='same', 
+    x = layers.Conv2D(config['num_filters'], 1, activation='swish', padding='same', 
                      kernel_regularizer=regularizer, bias_regularizer=regularizer)(inp)
     x = layers.SpatialDropout2D(config['dropout_rate'])(x)
 
@@ -184,6 +188,7 @@ def build_model(
 
 def train():
     
+    # Initialize wandb - let it handle config for sweeps
     wandb.init(
         project="HeadPoseRegressor-BIWI-96features",
         config=config,
@@ -267,15 +272,15 @@ def train():
 
     callbacks = [
         
-        keras.callbacks.ReduceLROnPlateau(
-            monitor=config['monitor_metric'],
-            factor=0.5,             # Halves the LR each time
-            patience=20,            # Waits 20 epochs after val_loss stops improving
-            min_delta=1e-4,         # Slight improvement required to reset patience
-            cooldown=5,             # Waits 5 epochs after LR drop before monitoring again
-            min_lr=1e-6,            # Don’t reduce LR below this
-            verbose=1
-        ),
+        # keras.callbacks.ReduceLROnPlateau(
+        #     monitor=config['monitor_metric'],
+        #     factor=0.5,             # Halves the LR each time
+        #     patience=20,            # Waits 20 epochs after val_loss stops improving
+        #     min_delta=1e-4,         # Slight improvement required to reset patience
+        #     cooldown=5,             # Waits 5 epochs after LR drop before monitoring again
+        #     min_lr=1e-6,            # Don’t reduce LR below this
+        #     verbose=1
+        # ),
         
 
         
@@ -310,6 +315,10 @@ def train():
         'roll_prob': val_roll_prob,
         'roll_reg': val_roll_reg
     }
+    
+    print (f"The config value for 'dropout_rate' is: {config['dropout_rate']}")
+    print (f"The config value for 'regularizer_rate' is: {config['regularizer_rate']}")
+    print (f"The config value for 'learning_rate' is: {config['learning_rate']}")
     
     history = mymodel.fit(
         x=train_features,
@@ -404,6 +413,23 @@ def train():
     print (f"AFLW2000 test mean mae: {mean_test_AFLW2000_mae}")
     
 if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '--dropout_rate',
+        type=float,
+    )
+    parser.add_argument(
+        '--regularizer_rate',
+        type=float,
+    )
+    parser.add_argument(
+        '--num_filters',
+        type=int,
+    )
+
+    config.update(vars(parser.parse_args()))    
     
     train()
 

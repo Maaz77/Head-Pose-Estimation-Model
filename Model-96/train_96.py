@@ -4,10 +4,10 @@ from tensorflow import keras
 from sklearn.model_selection import train_test_split
 import wandb
 import os
-import io
-from datetime import datetime
-import matplotlib.pyplot as plt
+import argparse
 from utilities import WandbCallback, load_dataset, load_dataset_with_weights, load_model_from_json, analyze_angle_distributions
+from dotenv import load_dotenv
+load_dotenv()
 
 # Suppress warnings
 import warnings
@@ -15,6 +15,13 @@ import warnings
 warnings.filterwarnings('ignore')
 tf.get_logger().setLevel('ERROR')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+tf.random.set_seed(RANDOM_SEED)
+os.environ['PYTHONHASHSEED'] = str(RANDOM_SEED)
+
 
 # Define training configuration
 
@@ -34,18 +41,21 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 ########################################################
 config = {
     # Training parameters
-    'learning_rate': 0.00028,  # Increased from 0.00014 to account for 4x larger batch size
+    'learning_rate': 0.00028,  
     'batch_size': 128,
-    'total_epochs': 1024,
-    'early_stopping_patience': 30,
-    'early_stopping_min_delta': 0.001,  # Minimum change in monitored metric to qualify as an improvement
+    'total_epochs': 10000,
+    'early_stopping_patience': 40,
+    'early_stopping_min_delta': 0.001,  
     # Optimizer parameters
-    'optimizer': 'sgd',
+    'optimizer': 'adam', 
     'loss_function': 'mse',
     'performance_metrics': ['mae'],
     # Model checkpointing
     'save_best_only': True,
-    'monitor_metric': 'val_loss'
+    'monitor_metric': 'val_loss',
+    'dropout_rate': -1,
+    'regularizer_rate': -1, 
+    'num_filters': -1
 }
 
 
@@ -53,96 +63,50 @@ config = {
 
 
 def create_model():
-    """Create a model for head pose estimation with skip connections using upsampling for dimension alignment."""
-    # Base input layer
+    
+    regularizer = tf.keras.regularizers.l2(config['regularizer_rate'])
+
+    
     inputs = keras.Input(shape=(None,None,96))
     
-    # First layer - no skip connection
     x1 = keras.layers.Conv2D(
-        filters=256,
+        filters=config['num_filters'],
         kernel_size=1,
         padding='same',
         activation='tanh',
-        kernel_initializer=keras.initializers.GlorotUniform()
+        kernel_initializer=keras.initializers.GlorotUniform(),
+        bias_regularizer=regularizer,
+        kernel_regularizer=regularizer
     )(inputs)
     
-    x1 = keras.layers.Conv2D(
-        filters=128,
-        kernel_size=1,
-        padding='same',
-        activation='tanh',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(x1)
+    x1  = keras.layers.SpatialDropout2D(config['dropout_rate'])(x1)
     
-    # Second layer - skip from input
-    x2 = keras.layers.Conv2D(
-        filters=64,
-        kernel_size=1,
-        padding='same',
-        activation='tanh',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(x1)
-    
-    # Skip connection from input to x2
-    skip1 = keras.layers.Conv2D(
-        filters=64,
-        kernel_size=1,
-        padding='same',
-        activation='tanh',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(inputs)
-    x2 = keras.layers.Add()([x2, skip1])
-    
-    # Third layer - skip from x1
-    x3 = keras.layers.Conv2D(
-        filters=32,
-        kernel_size=1,
-        padding='same',
-        activation='relu',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(x2)
-    
-    # Skip connection from x1 to x3
-    skip2 = keras.layers.Conv2D(
-        filters=32,
-        kernel_size=1,
-        padding='same',
-        activation='tanh',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(x1)
-    x3 = keras.layers.Add()([x3, skip2])
-    
-    # Fourth layer - skip from x2
-    x4 = keras.layers.Conv2D(
-        filters=16,
-        kernel_size=1,
-        padding='same',
-        activation='tanh',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(x3)
-    
-    # Skip connection from x2 to x4
-    skip3 = keras.layers.Conv2D(
-        filters=16,
-        kernel_size=1,
-        padding='same',
-        activation='tanh',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(x2)
-    x4 = keras.layers.Add()([x4, skip3])
-    
-    # Final layer - no skip connection
     outputs = keras.layers.Conv2D(
-        filters=3,
+        filters=3,  # 3 output values for pose angles
         kernel_size=1,
         padding='same',
-        activation='linear',
-        kernel_initializer=keras.initializers.GlorotUniform()
-    )(x4)
+        activation=None,  # No activation for regression output
+        kernel_initializer=keras.initializers.GlorotUniform(),
+        bias_regularizer=regularizer,
+        kernel_regularizer=regularizer
+    )(x1)
     
+    outputs = keras.layers.SpatialDropout2D(config['dropout_rate'])(outputs)
     
     
     model = keras.Model(inputs=inputs, outputs=outputs)
+    
+    if config['optimizer'] == 'adamax':
+        myoptimizer = keras.optimizers.Adamax(learning_rate=config['learning_rate'])
+        
+    else:
+        myoptimizer = keras.optimizers.SGD(learning_rate=config['learning_rate']) if config['optimizer'] == 'sgd' else keras.optimizers.Adam(learning_rate=config['learning_rate'])
+    
+    model.compile(
+        optimizer=myoptimizer,
+        loss=config['loss_function'],
+        metrics=config['performance_metrics']
+    )
     return model
 
 
@@ -151,55 +115,44 @@ def train():
     wandb.init(
         project="HeadPoseRegressor-BIWI-96features",
         config=config,
-        notes="Restore the architecture of the model of the run za1bxuzn which was the best test mae with the lowest #params but train it this time only on BIWI_Train dataset.",
+        notes="",
         tags=["BIWI_Train"]
     )
-    
+    FEATUREMAPS_DIR_PATH = os.getenv('FEATUREMAPS_DIR_PATH')
     # Load datasets
     print("Loading datasets...")
-    train_features, train_poses = load_dataset('Head-Pose-Estimation-Model/FeatureMaps_Datasets/BIWI_train_features_96.npz')
-    #train_features2, train_poses2 = load_dataset('processed_datasets/trainset2_features_96.npz')
+    train_features, train_poses = load_dataset(f'{FEATUREMAPS_DIR_PATH}BIWI_train_features_96.npz')
     
-    #train_features = np.concatenate((train_features, train_features2), axis=0)
-    #train_poses = np.concatenate((train_poses, train_poses2), axis=0)
-    
-    test_features, test_poses = load_dataset('Head-Pose-Estimation-Model/FeatureMaps_Datasets/BIWI_test_features_96.npz')
-    
-    print(f"train_features shape: {train_features.shape}")
-    print(f"train_poses shape: {train_poses.shape}")
-    print(f"test_features shape: {test_features.shape}")
-    print(f"test_poses shape: {test_poses.shape}")
 
-    # Analyze angle distributions before training
-    analyze_angle_distributions(train_poses, test_poses)
+    
+    test_features, test_poses = load_dataset(f'{FEATUREMAPS_DIR_PATH}/BIWI_test_features_96.npz')
+    
+    test_AFLW200_features, test_AFLW2000_poses = load_dataset(f'{FEATUREMAPS_DIR_PATH}/AFLW2000_features_96_0.7_1.npz')
+    
 
-    # Reshape features
+
     train_features = train_features.reshape(-1, 1, 1, 96)
     test_features = test_features.reshape(-1, 1, 1, 96)
+    test_AFLW200_features = test_AFLW200_features.reshape(-1, 1, 1, 96)
+    
+    train_poses = train_poses.reshape(-1, 1, 1, 3)
+    test_poses = test_poses.reshape(-1, 1, 1, 3)
+    test_AFLW2000_poses = test_AFLW2000_poses.reshape(-1, 1, 1, 3)
 
-    # Split training data
     train_features, val_features, train_poses, val_poses = train_test_split(
         train_features, train_poses, 
         test_size=0.2, 
         random_state=42
     )
 
-    # Create and compile model
-    #model = create_model()
-    model = load_model_from_json("Head-Pose-Estimation-Model/za1bxuzn.json")
-    myoptimizer = keras.optimizers.SGD(learning_rate=config['learning_rate']) if config['optimizer'] == 'sgd' else keras.optimizers.Adam(learning_rate=config['learning_rate'])
-    model.compile(
-        optimizer=myoptimizer,
-        loss=config['loss_function'],
-        metrics=config['performance_metrics']
-    )
 
 
+    TRAINED_MODELS_96_RESHAPEDINPUT_NOFLATTEN_PATH = os.getenv('TRAINED_MODELS_96_RESHAPEDINPUT_NOFLATTEN_PATH')
 
     # Create callbacks
     callbacks = [
         keras.callbacks.ModelCheckpoint(
-            f'Trained Models/model_runid_{wandb.run.id}.h5',
+            f'{TRAINED_MODELS_96_RESHAPEDINPUT_NOFLATTEN_PATH}/{wandb.run.id}.h5',
             monitor=config['monitor_metric'],
             save_best_only=config['save_best_only']
         ),
@@ -209,7 +162,7 @@ def train():
             min_delta=config['early_stopping_min_delta'],
             restore_best_weights=True
         ),
-        WandbCallback()
+        WandbCallback(),
         # keras.callbacks.ReduceLROnPlateau(
         #     monitor='val_loss',
         #     factor=0.5,
@@ -217,8 +170,8 @@ def train():
         #     min_lr=1e-6
         # )
     ]
-
-    # Train the model
+    model = create_model()
+    
     history = model.fit(
         train_features,
         train_poses,
@@ -231,44 +184,12 @@ def train():
 
     # Evaluate on test set
     test_loss, test_mae = model.evaluate(test_features, test_poses, verbose=2)
+    test_AFLW200_loss, test_AFLW200_mae = model.evaluate(test_AFLW200_features, test_AFLW2000_poses, verbose=2)
 
-    # Create and log learning curves
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    
-    # Plot loss
-    ax1.plot(history.history['loss'], label='Training Loss')
-    ax1.plot(history.history['val_loss'], label='Validation Loss')
-    ax1.set_title('Model Loss')
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Loss')
-    ax1.legend()
-    
-    # Plot MAE
-    ax2.plot(history.history['mae'], label='Training MAE')
-    ax2.plot(history.history['val_mae'], label='Validation MAE')
-    ax2.set_title('Model MAE')
-    ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('MAE')
-    ax2.legend()
-    
-    plt.tight_layout()
-    
-    # Convert plot to image
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight')
-    buf.seek(0)
-    
-    # Convert to numpy array
-    import PIL.Image
-    image = PIL.Image.open(buf)
-    image_array = np.array(image)
-    
-    # Log final learning curves to wandb
-    wandb.log({
-        "final_learning_curves": wandb.Image(image_array)
-    })
-    plt.close()
 
+
+    wandb.run.summary['test_AFLW2000_mae'] = test_AFLW200_mae
+    wandb.run.summary['test_AFLW2000_loss'] = test_AFLW200_loss
     wandb.run.summary['test_loss'] = test_loss
     wandb.run.summary['test_mae'] = test_mae
     wandb.run.summary['total_parameters'] = model.count_params()
@@ -286,8 +207,32 @@ def train():
         'best_epoch_val_loss': history.history['val_loss'][best_epoch_idx], 
         'best_epoch_val_mae': history.history['val_mae'][best_epoch_idx]
     })
+    
+    
 
     
 
 if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--dropout_rate',
+        type=float,
+        default=config['dropout_rate'],
+        
+    )
+    parser.add_argument(
+        '--regularizer_rate',
+        type=float,
+        default=config['regularizer_rate'],
+    )
+    parser.add_argument(
+        '--num_filters',
+        type=int,
+        default=config['num_filters'],
+    )
+    
+    config.update(vars(parser.parse_args()))    
+
+    
     train() 

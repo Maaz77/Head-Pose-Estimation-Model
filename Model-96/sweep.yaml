@@ -1,0 +1,14 @@
+method: bayes
+count: 50
+metric:
+  goal: minimize
+  name: test_AFLW2000_mae
+parameters:
+  dropout_rate:
+    values: [0.0, 1e-6,1e-4, 1e-3, 1e-2, 5e-2, 1e-1, 0.7]
+  regularizer_rate:
+    values: [0.0, 1e-7, 1e-5, 1e-3, 1e-2, 5e-2, 1e-1, 0.7]
+  num_filters:
+    values: [16, 64, 128 , 256 , 360]
+program: train_96.py
+

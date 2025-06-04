@@ -193,8 +193,8 @@ def log_test_metrics_for_runs(run_ids, model_dir, dataset_path, project_name="He
             run = api.run(run_path)
             
             # Log test metrics
-            run.config["test_AFLW2000_mae"] = test_aflw2000_mae
-            run.config["test_AFLW2000_loss"] = test_aflw2000_loss
+            run.summary["test_AFLW2000_mae"] = test_aflw2000_mae
+            run.summary["test_AFLW2000_loss"] = test_aflw2000_loss
             
             # Update the run
             run.update()
